@@ -81,7 +81,6 @@
     const nowPlaying = document.getElementById('nowPlaying');
     let watchId = null;
     let nextPointIndex = 0;
-    // 이미 재생을 시작한 지점은 GPS가 다시 들어와도 절대 재생하지 않습니다.
     const playedPoints = new Set();
     let currentPoint = null;
     let isPaused = false;
@@ -124,10 +123,13 @@
       setMessage(`${point.n}번 지점에 도착했습니다.`);
       updatePauseButton();
       if (!isPaused) {
-        try { await player.play(); }
-        catch (err) {
+        try {
+          await player.play();
+          isPaused = false;
+          setMessage(`${point.n}번 지점에 도착했습니다.`);
+        } catch (err) {
           isPaused = true;
-          setMessage('음원 재생을 시작하려면 아래 버튼을 눌러 주세요.');
+          setMessage('브라우저가 자동 재생을 막았습니다. GPS 시작 버튼을 다시 눌러 재생 권한을 허용해 주세요.');
           pauseButton.disabled = false;
           pauseButton.textContent = '음원 재생';
         }
@@ -150,7 +152,6 @@
       }
       if (nextPointIndex >= points.length || isTransitioning) return;
       const target = points[nextPointIndex];
-      // 코스는 한 방향으로만 진행합니다. 이미 처리한 이전 지점은 다시 검사하지 않습니다.
       if (playedPoints.has(target.n)) return;
       const distance = distanceMeters(latitude,longitude,target.lat,target.lng);
       if (distance <= radiusFor(target)) {
@@ -173,6 +174,20 @@
       gpsButton.disabled = true;
       gpsButton.textContent = 'GPS 실행 중';
       setMessage('현재 위치를 확인하고 있습니다.');
+      // 모바일 브라우저의 자동재생 제한을 GPS 버튼을 누른 사용자 동작 안에서 미리 해제합니다.
+      // 음소거 상태로 짧게 재생 권한을 확보한 뒤 즉시 멈추고 음소거를 풉니다.
+      player.muted = true;
+      const unlockPromise = player.play();
+      if (unlockPromise && typeof unlockPromise.then === 'function') {
+        unlockPromise.then(() => {
+          player.pause();
+          player.currentTime = 0;
+          player.muted = false;
+        }).catch(() => { player.muted = false; });
+      } else {
+        player.pause();
+        player.muted = false;
+      }
       watchId = navigator.geolocation.watchPosition(onPosition,onGpsError,{ enableHighAccuracy:true, maximumAge:1000, timeout:20000 });
     });
     pauseButton.addEventListener('click', async () => {
