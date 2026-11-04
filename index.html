@@ -49,13 +49,14 @@
     const points = [
       { n:1, name:'국자와 주걱', lat:37.653333, lng:126.445000, audio:'audio/1.mp3' },
       { n:2, name:'죽은 나무', lat:37.653056, lng:126.446111, audio:'audio/2.mp3' },
-      { n:3, name:'흙집', lat:37.653333, lng:126.446944, audio:'audio/3.mp3' },
-      { n:4, name:'흙집 다음 좌회전', lat:37.653056, lng:126.447222, audio:'audio/4.mp3' },
+      { n:3, name:'흙집', lat:37.653333, lng:126.446944, audio:'audio/3.mp3', radius:18 },
+      { n:4, name:'흙집 다음 좌회전', lat:37.653056, lng:126.447222, audio:'audio/4.mp3', radius:18 },
       { n:5, name:'사거리 좌회전', lat:37.654444, lng:126.446667, audio:'audio/5.mp3' },
       { n:6, name:'남천 사거리', lat:37.654167, lng:126.443333, audio:'audio/6.mp3' },
       { n:7, name:'마지막 사거리', lat:37.653056, lng:126.443333, audio:'audio/7.mp3' }
     ];
-    const RADIUS_METERS = 20;
+    const DEFAULT_RADIUS_METERS = 20;
+    const radiusFor = point => point.radius ?? DEFAULT_RADIUS_METERS;
     const FADE_MS = 2000;
     const map = L.map('map', { zoomControl:true }).setView([37.6537,126.4452], 17);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -66,7 +67,7 @@
     points.forEach(p => {
       const marker = L.marker([p.lat,p.lng], { icon:L.divIcon({className:'', html:`<div class="point-number">${p.n}</div>`, iconSize:[30,30], iconAnchor:[15,15]}) }).addTo(map);
       marker.bindTooltip(`${p.n}. ${p.name}`, { permanent:true, direction:'right', offset:[9,0], className:'point-label' });
-      L.circle([p.lat,p.lng], { radius:RADIUS_METERS, color:'#2586c8', weight:1, opacity:.35, fillColor:'#2586c8', fillOpacity:.045, interactive:false }).addTo(map);
+      L.circle([p.lat,p.lng], { radius:radiusFor(p), color:'#2586c8', weight:1, opacity:.35, fillColor:'#2586c8', fillOpacity:.045, interactive:false }).addTo(map);
       bounds.push([p.lat,p.lng]);
     });
     // 코스 전체가 처음 화면에 들어오도록 하되, 모바일에서는 제어판 아래 공간을 고려합니다.
@@ -80,6 +81,8 @@
     const nowPlaying = document.getElementById('nowPlaying');
     let watchId = null;
     let nextPointIndex = 0;
+    // 이미 재생을 시작한 지점은 GPS가 다시 들어와도 절대 재생하지 않습니다.
+    const playedPoints = new Set();
     let currentPoint = null;
     let isPaused = false;
     let isTransitioning = false;
@@ -96,8 +99,9 @@
       pauseButton.textContent = isPaused ? '음원 다시 재생' : '음원 일시정지';
     }
     async function playPoint(point) {
-      if (isTransitioning) return;
+      if (isTransitioning || playedPoints.has(point.n)) return;
       isTransitioning = true;
+      playedPoints.add(point.n);
       const wasPaused = isPaused;
       if (currentPoint && !player.paused) {
         const startVolume = player.volume;
@@ -146,8 +150,12 @@
       }
       if (nextPointIndex >= points.length || isTransitioning) return;
       const target = points[nextPointIndex];
+      // 코스는 한 방향으로만 진행합니다. 이미 처리한 이전 지점은 다시 검사하지 않습니다.
+      if (playedPoints.has(target.n)) return;
       const distance = distanceMeters(latitude,longitude,target.lat,target.lng);
-      if (distance <= RADIUS_METERS) {
+      if (distance <= radiusFor(target)) {
+        // 3번 음원이 끝나기 전에는 4번 지점에 도착해도 넘어가지 않습니다.
+        if (target.n === 4 && currentPoint?.n === 3 && !player.ended) return;
         // 지점은 순서대로 한 번만 통과 처리합니다. GPS가 반경 안에서 흔들려도 재시작하지 않습니다.
         playPoint(target);
       } else {
@@ -181,7 +189,14 @@
       updatePauseButton();
     });
     player.addEventListener('ended', () => {
-      if (currentPoint) setMessage(`${currentPoint.n}번 음원이 끝났습니다. 다음 지점으로 이동해 주세요.`);
+      if (!currentPoint) return;
+      setMessage(`${currentPoint.n}번 음원이 끝났습니다. 다음 지점으로 이동해 주세요.`);
+      // 3번 음원이 끝났을 때 이미 4번 반경 안에 있다면 그때 4번을 시작합니다.
+      if (currentPoint.n === 3 && lastPosition && nextPointIndex === 3) {
+        const target = points[3];
+        const distance = distanceMeters(lastPosition.lat,lastPosition.lng,target.lat,target.lng);
+        if (distance <= radiusFor(target)) playPoint(target);
+      }
     });
     player.addEventListener('error', () => {
       if (currentPoint) setMessage(`${currentPoint.n}번 음원 파일을 찾을 수 없습니다. audio 폴더의 파일 이름을 확인해 주세요.`);
